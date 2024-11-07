@@ -7,7 +7,6 @@ import threading
 import queue
 from typing import Optional, Callable, Dict, Any
 
-import openai
 import pyaudio
 from websocket import create_connection, WebSocketConnectionClosedException
 from dotenv import load_dotenv
@@ -788,8 +787,6 @@ def main() -> None:
     if not api_key:
         logger.error("OPENAI_API_KEY is not set in the environment.")
         return
-
-    openai.api_key = api_key
 
     ws_url = WS_URL_TEMPLATE  # Update if dynamic URL is needed
 

@@ -1,4 +1,3 @@
-openai
 pyaudio
 websocket-client
 python-dotenv
