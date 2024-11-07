@@ -34,6 +34,12 @@ WS_URL_TEMPLATE: str = (
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
 )
 
+# Load the output folder from environment variables
+OUTPUT_FOLDER: str = os.getenv("OUTPUT_FOLDER", "./saved_files")
+
+# Ensure the output folder exists
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
 # Tools Definition
 TOOLS: list = [
     {
@@ -49,6 +55,29 @@ TOOLS: list = [
                 },
             },
             "required": ["message"],
+        },
+    },
+    {
+        "name": "save_to_file",
+        "description": "Save user-specified content to a file.",
+        "type": "function",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_name": {
+                    "type": "string",
+                    "description": "The name of the file to save (without extension).",
+                },
+                "file_extension": {
+                    "type": "string",
+                    "description": "The extension of the file (e.g., txt, md).",
+                },
+                "file_content": {
+                    "type": "string",
+                    "description": "The content to write into the file.",
+                },
+            },
+            "required": ["file_name", "file_extension", "file_content"],
         },
     },
     # Additional tools can be added here
@@ -619,6 +648,13 @@ class RealtimeAssistant:
         """
         if function_name == "write_to_console":
             self._write_to_console(function_args.get("message"), call_id)
+        elif function_name == "save_to_file":
+            self._save_to_file(
+                function_args.get("file_name"),
+                function_args.get("file_extension"),
+                function_args.get("file_content"),
+                call_id,
+            )
         else:
             logger.warning(f"Unknown function: {function_name}")
 
@@ -654,6 +690,85 @@ class RealtimeAssistant:
             self.ws_client.send(followup_payload)
         else:
             logger.error("No message provided for write_to_console function.")
+
+    def _save_to_file(
+        self, file_name: str, file_extension: str, file_content: str, call_id: str
+    ) -> None:
+        """
+        Saves the provided content to a file within the OUTPUT_FOLDER.
+
+        :param file_name: The name of the file to save (without extension).
+        :param file_extension: The extension of the file (e.g., txt, md).
+        :param file_content: The content to write into the file.
+        :param call_id: The call identifier for tracking.
+        """
+        if not all([file_name, file_extension, file_content]):
+            logger.error("Missing parameters for save_to_file function.")
+            return
+
+        # Sanitize the file name and extension to prevent path traversal
+        safe_file_name = os.path.basename(file_name)
+        safe_file_extension = os.path.basename(file_extension)
+
+        # Ensure that the file extension does not contain harmful characters
+        if not safe_file_extension.isalnum():
+            logger.error("Invalid file extension provided.")
+            return
+
+        # Construct the full file path
+        full_file_name = f"{safe_file_name}.{safe_file_extension}"
+        file_path = os.path.join(OUTPUT_FOLDER, full_file_name)
+
+        # Resolve the absolute path and ensure it's within OUTPUT_FOLDER
+        try:
+            absolute_output_folder = os.path.abspath(OUTPUT_FOLDER)
+            absolute_file_path = os.path.abspath(file_path)
+
+            if not absolute_file_path.startswith(absolute_output_folder):
+                logger.error("Attempted path traversal detected.")
+                return
+
+            # Write the content to the file
+            with open(absolute_file_path, "w", encoding="utf-8") as f:
+                f.write(file_content)
+
+            logger.info(f"File saved successfully at: {absolute_file_path}")
+
+            # Notify the assistant about the successful operation
+            response_payload = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": f"File '{full_file_name}' saved successfully in '{OUTPUT_FOLDER}'.",
+                },
+            }
+            self.ws_client.send(response_payload)
+
+            followup_payload = {
+                "type": "response.create",
+                "response": {
+                    "modalities": ["audio", "text"],
+                    "instructions": (
+                        "Now call the next tool, or continue the conversation if you are done "
+                        "or require more input for the task."
+                    ),
+                },
+            }
+            self.ws_client.send(followup_payload)
+
+        except Exception as e:
+            logger.error(f"Failed to save file: {e}")
+            # Notify the assistant about the failure
+            response_payload = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": f"Failed to save file '{full_file_name}'. Error: {str(e)}",
+                },
+            }
+            self.ws_client.send(response_payload)
 
     def stop(self) -> None:
         """
