@@ -1,0 +1,23 @@
+# Assistant voice configuration
+assistant_voice: "alloy" # Choose from: alloy, ash, ballad, coral, echo, sage, shimmer, verse
+
+# Allow user to interrupt the assistant
+allow_interruptions: true
+
+# OpenAI model name used in the WebSocket URL
+model_name: "gpt-4o-realtime-preview-2024-10-01"
+
+# Temperature setting for the assistant's responses
+temperature: 0.8
+
+# Determines who speaks first in the conversation
+assistant_talks_first: true
+
+# Debug log file path
+debug_log_file: "incoming_messages.log"
+
+# Output folder for "save_to_file" tool
+output_folder: "./saved_files"
+
+# Debug mode, currently logs the messages
+debug_mode: false

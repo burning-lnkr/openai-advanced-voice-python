@@ -10,6 +10,7 @@ from typing import Optional, Callable, Dict, Any
 import pyaudio
 from websocket import create_connection, WebSocketConnectionClosedException
 from dotenv import load_dotenv
+import yaml
 
 # Configure logging
 logging.basicConfig(
@@ -20,21 +21,45 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Configuration Constants
-CHUNK_SIZE: int = 1024
-RATE: int = 24000
-FORMAT: int = pyaudio.paInt16
 REENGAGE_DELAY_MS: int = 500
-# Debug log file
-DEBUG_LOG_FILE: str = "incoming_messages.log"
 
-# WebSocket URL Template (Update with the correct endpoint if necessary)
-WS_URL_TEMPLATE: str = (
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
-)
 
-# Load the output folder from environment variables
-OUTPUT_FOLDER: str = os.getenv("OUTPUT_FOLDER", "./saved_files")
+# Load configuration from config.yaml
+def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
+    """
+    Loads configuration from a YAML file.
+
+    :param config_path: Path to the YAML configuration file.
+    :return: Dictionary containing configuration parameters.
+    """
+    if not os.path.exists(config_path):
+        logger.error(f"Configuration file {config_path} not found.")
+        raise FileNotFoundError(f"Configuration file {config_path} not found.")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        try:
+            config = yaml.safe_load(f)
+            logger.info(f"Configuration loaded from {config_path}.")
+            return config
+        except yaml.YAMLError as e:
+            logger.error(f"Error parsing the configuration file: {e}")
+            raise
+
+
+config = load_config()
+
+# Configuration Constants (Moved to config.yaml)
+DEBUG_LOG_FILE: str = config.get("debug_log_file", "incoming_messages.log")
+MODEL_NAME: str = config.get("model_name", "gpt-4o-realtime-preview-2024-10-01")
+ASSISTANT_VOICE: str = config.get("assistant_voice", "alloy")
+TEMPERATURE: float = config.get("temperature", 0.8)
+ASSISTANT_TALKS_FIRST: bool = config.get("assistant_talks_first", False)
+
+# WebSocket URL Template (Model name is now dynamic based on config)
+WS_URL_TEMPLATE: str = f"wss://api.openai.com/v1/realtime?model={MODEL_NAME}"
+
+# Output folder configuration
+OUTPUT_FOLDER: str = config.get("output_folder", "./saved_files")
 
 # Ensure the output folder exists
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -188,9 +213,9 @@ class AudioHandler:
 
     def __init__(
         self,
-        chunk_size: int = CHUNK_SIZE,
-        rate: int = RATE,
-        format: int = FORMAT,
+        chunk_size: int = 1024,
+        rate: int = 24000,
+        format: int = pyaudio.paInt16,
         allow_interruptions: bool = False,  # New parameter
     ) -> None:
         """
@@ -389,7 +414,9 @@ class RealtimeAssistant:
         api_key: str,
         ws_url: str,
         enable_debug: bool = False,
-        allow_interruptions: bool = False,  # New parameter
+        allow_interruptions: bool = False,
+        assistant_voice: str = "alloy",
+        temperature: float = 0.8,
     ) -> None:
         """
         Initializes the RealtimeAssistant.
@@ -398,11 +425,15 @@ class RealtimeAssistant:
         :param ws_url: WebSocket URL for real-time communication.
         :param enable_debug: Flag to enable debug logging of all incoming messages.
         :param allow_interruptions: If True, allows user to interrupt the assistant by keeping the mic active.
+        :param assistant_voice: The voice to be used by the assistant.
+        :param temperature: The temperature setting for the assistant's responses.
         """
         self.api_key = api_key
         self.ws_url = ws_url
         self.enable_debug = enable_debug
         self.allow_interruptions = allow_interruptions  # Store the flag
+        self.assistant_voice = assistant_voice
+        self.temperature = temperature
 
         self.assistant_response_text: str = ""
 
@@ -448,6 +479,12 @@ class RealtimeAssistant:
         # Register tools and configure session
         self._initialize_session()
 
+        # Conditionally start the conversation based on configuration
+        if ASSISTANT_TALKS_FIRST:
+            message_payload = {"type": "response.create"}
+            self.ws_client.send(message_payload)
+            logger.info("Assistant initiated the conversation.")
+
         # Start audio streams
         self.audio_handler.start_streams(self.ws_client)
 
@@ -465,7 +502,7 @@ class RealtimeAssistant:
                     "Your voice and personality should be warm and engaging. "
                     "You are allowed and encouraged to talk to user about your available tools and their functionality."
                 ),
-                "voice": "ash",
+                "voice": self.assistant_voice,
                 "input_audio_format": "pcm16",
                 "output_audio_format": "pcm16",
                 "input_audio_transcription": {"model": "whisper-1"},
@@ -477,16 +514,12 @@ class RealtimeAssistant:
                 },
                 "tools": TOOLS,
                 "tool_choice": "auto",
-                "temperature": 0.8,
+                "temperature": self.temperature,
                 "max_response_output_tokens": "inf",
             },
         }
 
         self.ws_client.send(session_update_payload)
-
-        # Start the conversation
-        # message_payload = {"type": "response.create"}
-        # self.ws_client.send(message_payload)
 
     def handle_message(self, message: Dict[str, Any]) -> None:
         """
@@ -788,19 +821,13 @@ def main() -> None:
         logger.error("OPENAI_API_KEY is not set in the environment.")
         return
 
-    ws_url = WS_URL_TEMPLATE  # Update if dynamic URL is needed
+    ws_url = WS_URL_TEMPLATE  # Dynamic URL based on config
 
-    # Determine if debug mode is enabled via environment variable or other configuration
-    # For this example, we'll use an environment variable named DEBUG_MODE
-    debug_mode = os.getenv("DEBUG_MODE", "False").lower() in ("true", "1", "t")
+    # Determine if debug mode is enabled via config
+    debug_mode = config.get("debug_mode", False)
 
-    # NEW: Determine if interruption mode is enabled via environment variable
-    # Set ALLOW_INTERRUPTION=True to enable the new mode where the mic remains active
-    allow_interruptions = os.getenv("ALLOW_INTERRUPTION", "False").lower() in (
-        "true",
-        "1",
-        "t",
-    )
+    # Determine if interruption mode is enabled via config
+    allow_interruptions = config.get("allow_interruptions", False)
 
     # Initialize the RealtimeAssistant with debug logging and interruption mode if desired
     assistant = RealtimeAssistant(
@@ -808,6 +835,8 @@ def main() -> None:
         ws_url=ws_url,
         enable_debug=debug_mode,
         allow_interruptions=allow_interruptions,  # Pass the new flag
+        assistant_voice=ASSISTANT_VOICE,
+        temperature=TEMPERATURE,
     )
 
     try:

@@ -1,3 +1,4 @@
 pyaudio
 websocket-client
 python-dotenv
+PyYAML
